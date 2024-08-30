@@ -601,9 +601,10 @@ type ChartMarker struct {
 
 // ChartLine directly maps the format settings of the chart line.
 type ChartLine struct {
-	Type   ChartLineType
-	Smooth bool
-	Width  float64
+	Type            ChartLineType
+	Smooth          bool
+	Width           float64
+	ShowScatterLine bool
 }
 
 // ChartSeries directly maps the format settings of the chart series.
