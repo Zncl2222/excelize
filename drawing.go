@@ -752,10 +752,17 @@ func (f *File) drawChartSeriesSpPr(i int, opts *Chart) *cSpPr {
 	spPr = f.drawShapeFill(opts.Series[i].Fill, spPr)
 	spPrScatter := &cSpPr{
 		Ln: &aLn{
-			W:      25400,
-			NoFill: &attrValString{},
+			W: 25400,
 		},
 	}
+	if opts.Series[i].Line.ShowScatterLine {
+		spPrScatter.Ln.SolidFill = spPr.SolidFill
+		spPrScatter.Ln.W = f.ptToEMUs(opts.Series[i].Line.Width)
+		spPrScatter.Ln.Cap = "rnd"
+	} else {
+		spPrScatter.Ln.NoFill = &attrValString{}
+	}
+
 	spPrLine := &cSpPr{
 		Ln: &aLn{
 			W:         f.ptToEMUs(opts.Series[i].Line.Width),
