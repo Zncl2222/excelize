@@ -137,8 +137,8 @@ func TestAddChart(t *testing.T) {
 		t.FailNow()
 	}
 
-	categories := map[string]string{"A30": "SS", "A31": "S", "A32": "M", "A33": "L", "A34": "LL", "A35": "XL", "A36": "XXL", "A37": "XXXL", "B29": "Apple", "C29": "Orange", "D29": "Pear"}
-	values := map[string]int{"B30": 1, "C30": 1, "D30": 1, "B31": 2, "C31": 2, "D31": 2, "B32": 3, "C32": 3, "D32": 3, "B33": 4, "C33": 4, "D33": 4, "B34": 5, "C34": 5, "D34": 5, "B35": 6, "C35": 6, "D35": 6, "B36": 7, "C36": 7, "D36": 7, "B37": 8, "C37": 8, "D37": 8}
+	categories := map[string]string{"A30": "SS", "A31": "S", "A32": "M", "A33": "L", "A34": "LL", "A35": "XL", "A36": "XXL", "A37": "XXXL", "A38": "XXXXL", "A39": "XXXXXL", "B29": "Apple", "C29": "Orange", "D29": "Pear"}
+	values := map[string]int{"B30": 1, "C30": 1, "D30": 1, "B31": 2, "C31": 2, "D31": 2, "B32": 3, "C32": 3, "D32": 3, "B33": 4, "C33": 4, "D33": 4, "B34": 5, "C34": 5, "D34": 5, "B35": 6, "C35": 6, "D35": 6, "B36": 7, "C36": 7, "D36": 7, "B37": 8, "C37": 8, "D37": 8, "B38": 9, "C38": 9, "D38": 9, "B39": 10, "C39": 10, "D39": 10}
 	for k, v := range categories {
 		assert.NoError(t, f.SetCellValue("Sheet1", k, v))
 	}
@@ -163,6 +163,14 @@ func TestAddChart(t *testing.T) {
 			Marker: ChartMarker{
 				Fill: Fill{Type: "pattern", Color: []string{"FFFF00"}, Pattern: 1},
 			},
+		},
+		{
+			Name: "Sheet1!$A$38", Categories: "Sheet1!$B$29:$D$29", Values: "Sheet1!$B$38:$D$38",
+			Line: ChartLine{ShowScatterLine: true},
+		},
+		{
+			Name: "Sheet1!$A$39", Categories: "Sheet1!$B$29:$D$29", Values: "Sheet1!$B$39:$D$39",
+			Line: ChartLine{ShowScatterLine: true, Width: 10},
 		},
 	}
 	series2 := []ChartSeries{
