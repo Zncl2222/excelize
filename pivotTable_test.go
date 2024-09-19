@@ -182,6 +182,22 @@ func TestPivotTable(t *testing.T) {
 		ShowLastColumn:  true,
 	}))
 
+	// Test classic layout pivot table
+	assert.NoError(t, f.AddPivotTable(&PivotTableOptions{
+		DataRange:       "dataRange",
+		PivotTableRange: "Sheet2!A65:AJ100",
+		Rows:            []PivotTableField{{Data: "Month", DefaultSubtotal: true}, {Data: "Year"}},
+		Columns:         []PivotTableField{{Data: "Region", DefaultSubtotal: true}, {Data: "Type"}},
+		Data:            []PivotTableField{{Data: "Sales", Subtotal: "Sum", Name: "Sum of Sales", NumFmt: -1}, {Data: "Sales", Subtotal: "Average", Name: "Average of Sales", NumFmt: 38}},
+		RowGrandTotals:  true,
+		ColGrandTotals:  true,
+		ShowDrill:       true,
+		ShowRowHeaders:  true,
+		ShowColHeaders:  true,
+		ShowLastColumn:  true,
+		ClassicLayout:   true,
+	}))
+
 	// Test empty pivot table options
 	assert.Equal(t, ErrParameterRequired, f.AddPivotTable(nil))
 	// Test add pivot table with custom name which exceeds the max characters limit

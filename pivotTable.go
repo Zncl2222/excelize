@@ -60,6 +60,7 @@ type PivotTableOptions struct {
 	ShowLastColumn      bool
 	FieldPrintTitles    bool
 	ItemPrintTitles     bool
+	ClassicLayout       bool
 	PivotTableStyleName string
 }
 
@@ -387,6 +388,14 @@ func (f *File) addPivotTable(cacheID, pivotTableID int, opts *PivotTableOptions)
 	if pt.Name == "" {
 		pt.Name = fmt.Sprintf("PivotTable%d", pivotTableID)
 	}
+
+	// set classic layout
+	if opts.ClassicLayout {
+		pt.CompactData = boolPtr(false)
+		pt.Compact = boolPtr(false)
+		pt.GridDropZones = opts.ClassicLayout
+	}
+
 	// pivot fields
 	_ = f.addPivotFields(&pt, opts)
 
@@ -537,6 +546,15 @@ func (f *File) addPivotColFields(pt *xlsxPivotTableDefinition, opts *PivotTableO
 	return err
 }
 
+// setClassicLayout provides a method to set classic layout for pivot table by
+// setting Compact and Outline to false.
+func setClassicLayout(pt *xlsxPivotTableDefinition, opts *PivotTableOptions) {
+	if opts.ClassicLayout {
+		pt.PivotFields.PivotField[len(pt.PivotFields.PivotField)-1].Compact = boolPtr(false)
+		pt.PivotFields.PivotField[len(pt.PivotFields.PivotField)-1].Outline = boolPtr(false)
+	}
+}
+
 // addPivotFields create pivot fields based on the column order of the first
 // row in the data region by given pivot table definition and option.
 func (f *File) addPivotFields(pt *xlsxPivotTableDefinition, opts *PivotTableOptions) error {
@@ -569,9 +587,7 @@ func (f *File) addPivotFields(pt *xlsxPivotTableDefinition, opts *PivotTableOpti
 					Item:  items,
 				},
 			})
-			continue
-		}
-		if inPivotTableField(opts.Filter, name) != -1 {
+		} else if inPivotTableField(opts.Filter, name) != -1 {
 			pt.PivotFields.PivotField = append(pt.PivotFields.PivotField, &xlsxPivotField{
 				Axis:      "axisPage",
 				DataField: inPivotTableField(opts.Data, name) != -1,
@@ -583,9 +599,7 @@ func (f *File) addPivotFields(pt *xlsxPivotTableDefinition, opts *PivotTableOpti
 					},
 				},
 			})
-			continue
-		}
-		if inPivotTableField(opts.Columns, name) != -1 {
+		} else if inPivotTableField(opts.Columns, name) != -1 {
 			columnOptions, ok := f.getPivotTableFieldOptions(name, opts.Columns)
 			var items []*xlsxItem
 			if !ok || !columnOptions.DefaultSubtotal {
@@ -607,15 +621,14 @@ func (f *File) addPivotFields(pt *xlsxPivotTableDefinition, opts *PivotTableOpti
 					Item:  items,
 				},
 			})
-			continue
-		}
-		if inPivotTableField(opts.Data, name) != -1 {
+		} else if inPivotTableField(opts.Data, name) != -1 {
 			pt.PivotFields.PivotField = append(pt.PivotFields.PivotField, &xlsxPivotField{
 				DataField: true,
 			})
-			continue
+		} else {
+			pt.PivotFields.PivotField = append(pt.PivotFields.PivotField, &xlsxPivotField{})
 		}
-		pt.PivotFields.PivotField = append(pt.PivotFields.PivotField, &xlsxPivotField{})
+		setClassicLayout(pt, opts)
 	}
 	return err
 }
