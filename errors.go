@@ -375,6 +375,12 @@ func newPivotTableRangeError(msg string) error {
 	return fmt.Errorf("parameter 'PivotTableRange' parsing error: %s", msg)
 }
 
+// newPivotTableStyleRangeError defined the error message on receiving an
+// invalid cell range for a pivot table style.
+func newPivotTableStyleRangeError(msg string) error {
+	return fmt.Errorf("parameter 'RangeRef' parsing error: %s", msg)
+}
+
 // newPivotTableShowValuesAsBaseFieldError defined the error message on receiving
 // the invalid pivot table "show values as" base field.
 func newPivotTableShowValuesAsBaseFieldError(field string) error {

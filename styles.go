@@ -18,6 +18,7 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1674,6 +1675,8 @@ func (f *File) GetStyle(idx int) (*Style, error) {
 		return style, err
 	}
 	f.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if idx < 0 || s.CellXfs == nil || len(s.CellXfs.Xf) <= idx {
 		return style, newInvalidStyleID(idx)
 	}
@@ -1738,6 +1741,14 @@ func (f *File) NewConditionalStyle(style *Style) (int, error) {
 		return 0, err
 	}
 	f.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return f.newConditionalStyle(s, style, false)
+}
+
+// newConditionalStyle creates a differential format in a locked style sheet.
+// When deduplicate is true, an existing equivalent format is reused.
+func (f *File) newConditionalStyle(s *xlsxStyleSheet, style *Style, deduplicate bool) (int, error) {
 	fs, err := parseFormatStyleSet(style)
 	if err != nil {
 		return 0, err
@@ -1764,9 +1775,41 @@ func (f *File) NewConditionalStyle(style *Style) (int, error) {
 	if s.Dxfs == nil {
 		s.Dxfs = &xlsxDxfs{}
 	}
-	s.Dxfs.Count++
+	if deduplicate {
+		for dxfID, existing := range s.Dxfs.Dxfs {
+			if equalDxf(existing, &dxf) {
+				return dxfID, nil
+			}
+		}
+	}
 	s.Dxfs.Dxfs = append(s.Dxfs.Dxfs, &dxf)
+	s.Dxfs.Count = len(s.Dxfs.Dxfs)
 	return s.Dxfs.Count - 1, nil
+}
+
+// equalDxf reports whether two differential formats have the same semantics.
+// Custom number format identifiers are workbook-local, so their format codes
+// determine equality rather than their generated identifiers.
+func equalDxf(first, second *xlsxDxf) bool {
+	if first == nil || second == nil {
+		return first == second
+	}
+	if first.NumFmt == nil || second.NumFmt == nil {
+		if first.NumFmt != second.NumFmt {
+			return false
+		}
+	} else {
+		if first.NumFmt.FormatCode != second.NumFmt.FormatCode {
+			return false
+		}
+		if (first.NumFmt.NumFmtID < 164 || second.NumFmt.NumFmtID < 164) &&
+			first.NumFmt.NumFmtID != second.NumFmt.NumFmtID {
+			return false
+		}
+	}
+	firstDxf, secondDxf := *first, *second
+	firstDxf.NumFmt, secondDxf.NumFmt = nil, nil
+	return reflect.DeepEqual(firstDxf, secondDxf)
 }
 
 // GetConditionalStyle returns conditional format style definition by specified
@@ -1780,6 +1823,8 @@ func (f *File) GetConditionalStyle(idx int) (*Style, error) {
 		return style, err
 	}
 	f.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if idx < 0 || s.Dxfs == nil || len(s.Dxfs.Dxfs) <= idx {
 		return style, newInvalidStyleID(idx)
 	}
@@ -2835,7 +2880,15 @@ func (f *File) SetCellStyle(sheet, topLeftCell, bottomRightCell string, styleID 
 // cells. When this parameter is set then subsequent rules are not evaluated
 // if the current rule is true.
 func (f *File) SetConditionalFormat(sheet, rangeRef string, opts []ConditionalFormatOptions) error {
+	return f.setConditionalFormat(sheet, rangeRef, opts, false)
+}
+
+// setConditionalFormat sets conditional formatting rules and optionally marks
+// the collection as applying to a pivot table.
+func (f *File) setConditionalFormat(sheet, rangeRef string, opts []ConditionalFormatOptions, pivot bool) error {
+	f.mu.Lock()
 	ws, err := f.workSheetReader(sheet)
+	f.mu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -2843,11 +2896,10 @@ func (f *File) SetConditionalFormat(sheet, rangeRef string, opts []ConditionalFo
 	if err != nil {
 		return err
 	}
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
 	// Create a pseudo GUID for each unique rule.
-	var rules int
-	for _, cf := range ws.ConditionalFormatting {
-		rules += len(cf.CfRule)
-	}
+	priority := getConditionalFormatMaxPriority(ws)
 	var (
 		cfRule          []*xlsxCfRule
 		noCriteriaTypes = []string{
@@ -2870,9 +2922,9 @@ func (f *File) SetConditionalFormat(sheet, rangeRef string, opts []ConditionalFo
 			if ok || inStrSlice(noCriteriaTypes, vt, true) != -1 {
 				drawFunc, ok := drawContFmtFunc[vt]
 				if ok {
-					priority := rules + i
-					rule, x14rule := drawFunc(priority, ct, mastCell,
-						fmt.Sprintf("{00000000-0000-0000-%04X-%012X}", f.getSheetID(sheet), priority), &opt)
+					rulePriority := priority + i
+					rule, x14rule := drawFunc(rulePriority, ct, mastCell,
+						fmt.Sprintf("{00000000-0000-0000-%04X-%012X}", f.getSheetID(sheet), rulePriority), &opt)
 					if rule == nil && x14rule == nil {
 						return ErrParameterInvalid
 					}
@@ -2894,11 +2946,134 @@ func (f *File) SetConditionalFormat(sheet, rangeRef string, opts []ConditionalFo
 	}
 	if len(cfRule) > 0 {
 		ws.ConditionalFormatting = append(ws.ConditionalFormatting, &xlsxConditionalFormatting{
+			Pivot:  pivot,
 			SQRef:  SQRef,
 			CfRule: cfRule,
 		})
 	}
 	return err
+}
+
+// x14ConditionalFormatPriorityRegexp matches priorities in conditional
+// formatting rules stored in the worksheet extension list.
+var x14ConditionalFormatPriorityRegexp = regexp.MustCompile(`(?i)<(?:x14:)?cfRule\b[^>]*?\bpriority\s*=\s*["']([0-9]+)["']`)
+
+// getX14ConditionalFormatPriorities returns all explicit priorities stored in
+// the worksheet conditional formatting extension list.
+func getX14ConditionalFormatPriorities(ws *xlsxWorksheet) ([]int, [][]int) {
+	if ws.ExtLst == nil {
+		return nil, nil
+	}
+	matches := x14ConditionalFormatPriorityRegexp.FindAllStringSubmatchIndex(ws.ExtLst.Ext, -1)
+	priorities := make([]int, 0, len(matches))
+	for _, match := range matches {
+		priority, _ := strconv.Atoi(ws.ExtLst.Ext[match[2]:match[3]])
+		priorities = append(priorities, priority)
+	}
+	return priorities, matches
+}
+
+// getConditionalFormatMaxPriority returns the highest priority used by the
+// standard and extension-list conditional formatting rules on a worksheet.
+func getConditionalFormatMaxPriority(ws *xlsxWorksheet) int {
+	var maxPriority int
+	for _, conditionalFormatting := range ws.ConditionalFormatting {
+		if conditionalFormatting == nil {
+			continue
+		}
+		for _, rule := range conditionalFormatting.CfRule {
+			if rule == nil {
+				continue
+			}
+			if rule.Priority > maxPriority {
+				maxPriority = rule.Priority
+			}
+		}
+	}
+	priorities, _ := getX14ConditionalFormatPriorities(ws)
+	for _, priority := range priorities {
+		if priority > maxPriority {
+			maxPriority = priority
+		}
+	}
+	return maxPriority
+}
+
+// conditionalFormatPriority stores a standard or extension-list conditional
+// formatting rule and its original ordering.
+type conditionalFormatPriority struct {
+	priority int
+	order    int
+	rule     *xlsxCfRule
+	x14      int
+}
+
+// normalizeConditionalFormatPriorities assigns unique, contiguous priorities
+// to all existing worksheet rules while preserving their current precedence.
+func normalizeConditionalFormatPriorities(ws *xlsxWorksheet, start int) {
+	var priorities []conditionalFormatPriority
+	order := 0
+	for _, conditionalFormatting := range ws.ConditionalFormatting {
+		if conditionalFormatting == nil {
+			continue
+		}
+		for _, rule := range conditionalFormatting.CfRule {
+			if rule == nil {
+				continue
+			}
+			priorities = append(priorities, conditionalFormatPriority{
+				priority: rule.Priority,
+				order:    order,
+				rule:     rule,
+				x14:      -1,
+			})
+			order++
+		}
+	}
+	x14Priorities, matches := getX14ConditionalFormatPriorities(ws)
+	for idx, priority := range x14Priorities {
+		priorities = append(priorities, conditionalFormatPriority{
+			priority: priority,
+			order:    order,
+			x14:      idx,
+		})
+		order++
+	}
+	sort.SliceStable(priorities, func(i, j int) bool {
+		first, second := priorities[i], priorities[j]
+		if first.priority <= 0 || second.priority <= 0 {
+			if first.priority <= 0 && second.priority <= 0 {
+				return first.order < second.order
+			}
+			return second.priority <= 0
+		}
+		if first.priority == second.priority {
+			return first.order < second.order
+		}
+		return first.priority < second.priority
+	})
+	updatedX14 := append([]int(nil), x14Priorities...)
+	for idx, priority := range priorities {
+		value := start + idx
+		if priority.rule != nil {
+			priority.rule.Priority = value
+			continue
+		}
+		updatedX14[priority.x14] = value
+	}
+	if ws.ExtLst == nil || len(matches) == 0 {
+		return
+	}
+	var output strings.Builder
+	output.Grow(len(ws.ExtLst.Ext))
+	position := 0
+	for idx, match := range matches {
+		output.WriteString(ws.ExtLst.Ext[position:match[2]])
+		output.WriteString(strconv.Itoa(updatedX14[idx]))
+		position = match[3]
+	}
+	output.WriteString(ws.ExtLst.Ext[position:])
+	ws.ExtLst.Ext = output.String()
 }
 
 // prepareConditionalFormatRange returns checked cell range and master cell
